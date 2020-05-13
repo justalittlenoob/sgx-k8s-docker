@@ -1,0 +1,309 @@
+﻿centOS 7 -pengfei,zhao
+=====================================================================================
+1. install docker
+
+2. set docer boot up
+   # sudo systemctl enable docker
+
+3. config yum file for k8s 
+   [centos]
+   a. # vi /etc/yum.repos.d/kubernetes.repo
+   b. add
+      [k8s]
+      name=k8s
+      enabled=1
+      gpgcheck=0
+      baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64/
+   [ubuntu]
+   a. # sudo apt-get update && sudo apt-get install -y apt-transport-https curl
+   b. # curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+   c. # sudo vi /etc/apt/sources.list.d/kubernetes.list
+   d. add
+      deb https://apt.kubernetes.io/ kubernetes-xenial main
+   e. # sudo apt-get update
+
+
+4. install kubelet, kubeadm, and kubectl
+   [centos]
+   # yum install kubelet kubeadm kubectl -y
+   [ubuntu]
+   # sudo apt-get install -y kubelet kubeadm kubectl
+   # sudo apt-mark hold kubelet kubeadm kubectl
+
+5. set Kubelet boot up
+   # sudo systemctl enable kubelet
+=====================================================================================
+
+Make Cluster With Kubeadm
+------------------------------------------------------------------------------------
+[1st step] Environment setting (master machine)
+6. CPU >= 2
+
+7. hostname
+   a. # vi /etc/hosts
+   b. add 2 line:
+      10.67.117.23  k8s-master
+      10.67.116.173 k8s-node
+
+8. turn on bridge
+   # echo "1" >/proc/sys/net/bridge/bridge-nf-call-iptables
+
+9. turn off swap
+   # swapoff -a && sysctl -w vm.swappiness=0
+
+10. turn off SElinux
+   # setenforce 0
+   # sed -i --follow-symlinks 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/sysconfig/selinux
+
+11. turn off firewall (or add firelwall rules to spec port, see offical doc)
+   # systemctl stop firewalld (or # sudo iptables -F)
+------------------------------------------------------------------------------------
+[2nd step] init master
+12. init master
+   # sudo kubeadm init --apiserver-advertise-address 10.67.117.23 --pod-network-cidr=10.244.0.0/16
+[note] if init fail, need reset as following:
+    # kubeadm reset
+    # ifconfig cni0 down
+    # ip link delete cni0
+    # ifconfig flannel.1 down
+    # ip link delete flannel.1
+    # rm -rf /var/lib/cni/
+    # rm -rf /var/lib/etcd/*
+
+13. verify docker images
+   # sudo docker image ls
+-----------------------------------------------------------------------------------
+[3rd step] config Kubectl
+14. config Kubectl
+    # mkdir -p $HOME/.kube
+    # sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+    # sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+15. turn on auto-complete function of Kubectl
+    # echo "source <(kubectl completion bash)" >> ~/.bashrc
+
+16. verify Kubectl
+    # kubectl get cs
+-----------------------------------------------------------------------------------
+[4th step] install Pod network
+17. apply flannel
+    # sudo kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+[note] if fails, add proxy run: 
+       # export https_proxy=http://child-prc.intel.com:913
+       # export http_proxy=http://child-prc.intel.com:913
+
+18. start Kubelet
+    # sudo systemctl restart kubelet
+
+19. verify node state
+    # kubectl get nodes
+
+20. Pod state
+    # kubectl get pods -n kube-system
+=====================================================================================
+Add K8S Node
+21. same as Environment setting(master machine).
+
+22. Kubeket boot up
+    # sudo systemctl enable kubelet
+
+23. join to a cluster
+    # sudo kubeadm join 10.67.117.23:6443 --token he4gj5.f5uwb7vzj309g56x --discovery-token-ca-cert-hash sha256:0a9055784d380146d91348defc47106f06bfa3a8b98d771a5cc5cb6d1d7207f7
+
+[note] (1) the toker value can be get from master mahine: 
+           # kubeadm token list
+           the token is usefull within 24h, after 24h need to create a new one.
+           # kubeadm token create
+       (2) hash value can be got from master machine: 
+           # openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'
+
+24. verify result (on master machine)
+    # kubectl get nodes
+
+[note] At beginning, the node status is "NotReady", after a while it will become "Ready".
+       Because the node need time to download 4 image(flannel coredns kube-proxy pause)
+
+[troubleshooting]
+a. [WARNING IsDockerSystemdCheck]: detected "cgroupfs" as the Docker cgroup driver. The recommended driver is "systemd". 
+   # sudo vi /etc/docker/daemon.json
+     {
+     "exec-opts":["native.cgroupdriver=systemd"]
+     }
+   # sudo systemctl restart docker
+   # sudo systemctl status docker
+
+b. error execution phase kubelet-start: error uploading crisocket: timed out waiting for the condition
+# swapoff -a
+# kubeadm reset
+# systemctl daemon-reload
+# systemctl restart kubelet
+# iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X
+======================================================================================
+Delete K8S Node (on master)
+26. Set node to maintenance mode
+   # kubectl drain k8s-slave --delete-local-data --force --ignore-daemonsets
+
+27. del node
+   # kubectl delete node k8s-slave
+
+28. verify result
+   # kubectl get nodes
+======================================================================================
+Add the *deleted* node agein 
+29. stop Kubelet (on node)
+   # sudo systemctl stop kubelet
+
+30. del files (on node)
+   # sudo rm -rf /etc/kubernetes/*
+
+31. add node (on node)
+   # sudo kubeadm join 10.67.117.23:6443 --token he4gj5.f5uwb7vzj309g56x --discovery-token-ca-cert-hash sha256:0a9055784d380146d91348defc47106f06bfa3a8b98d771a5cc5cb6d1d7207f7
+
+32. verify the result (on master)
+   # kubectl get nodes
+======================================================================================
+Creating a Deployment (Nginx for example)
+33. make a deployment file (.yaml file) e.g.: nginx-deployment.yaml
+--------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+--------------------------------
+
+34. creae the deployment
+   # kubectl apply -f https://k8s.io/examples/controllers/nginx-deployment.yaml
+
+35. check the deployment
+   # kubectl get deployments
+
+36. detail of the deployment
+   # kubectl describe deploy nginx
+
+37. To see the Deployment rollout status
+   # kubectl rollout status deployment.v1.apps/nginx-deployment
+
+38. To see the ReplicaSet (rs) created by the Deployment
+   # kubectl get rs
+
+39. detail of rs 
+   # kubectl describe rs nginx-7bb7cd8db5
+
+40. To see the labels automatically generated for each Pod
+   # kubectl get pods --show-labels
+
+41. To See pods. we can get container ip, such as: 10.244.2.17
+   # kubectl get pod  
+   # kubectl get po -o wide
+   
+42. detail of pod
+   # kubectl describe po nginx-7bb7cd8db5-46rfm
+
+43. verify nginx on a pod is work.
+   # sudo curl 10.244.2.17
+======================================================================================
+Expose the Nginx publicly
+44. check pods
+   # kubectl get pod
+
+45. check services
+   # kubectl get services
+
+46. check deployment
+   # kubectl get deployment
+
+47. expose a deployment via a new service
+   # kubectl expose deployment/znginx-deployment --type="NodePort" --port 80
+[note] --port should be same as containerPort(#33 nginx-deployment.yaml)
+
+48. check the new service
+   # kubectl get services
+
+49. find out what port was opend externally(NodePort option)
+   # kubectl describe services/znginx-deployment
+
+50. verify result. For Example, the port is 31773 from #49
+   websit: http://10.67.117.23:31773/
+[note] the IP is the master machine ip.
+
+======================================================================================
+Delete A Pod
+43. del a pod
+   # kubectl delete po nginx-7bb7cd8db5-46rfm
+
+44. check pods
+   # kubectl get pod
+
+43. if pod is managed by deployment, you MUST del the deployment
+   # kubectl delete deploy nginx
+
+45. check deployment
+   # kubectl get deploy
+======================================================================================
+Web UI (Dashboard)
+46. deploy dashboard UI
+   # kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.0.0-beta8/aio/deploy/recommended.yaml
+
+47. check dashboard service
+   # kubectl get service -A
+
+48. check dashboard depoyment
+   # kubectl get deploy -A
+
+49. change dashboard service type to "NodePort"
+   #  kubectl -n kubernetes-dashboard patch svc kubernetes-dashboard --type='json' -p '[{"op":"replace","path":"/spec/type","value":"NodePort"}]'
+
+50. check dashboard service type and port(such as the port is 32042）
+   # kubectl get svc -A
+
+51. view Web UI(dashboard) outside the cluster.
+   https://[MasterIP]:[port]
+   such as: https://10.67.117.23:32042
+[note] When using chrome, you may got a WARNING: Your connection is not private.
+       This is because cert issu on master machine.
+       But you can walk around this by typing: thisisunsafe.
+
+52. Create ServiceAccount
+   # kubectl create serviceaccount dashboard-admin -n kube-system
+
+53. Binding role
+   # kubectl create clusterrolebinding dashboard-cluster-admin --clusterrole=cluster-admin --serviceaccount=kube-system:dashboard-admin
+
+54. Get secret info
+   # kubectl describe sa dashboard-admin -n kube-system
+[note] find the *Tokens* value, such as: dashboard-admin-token-wxqpq
+
+55. Get token 
+   #  kubectl describe secrets -n kube-system dashboard-admin-token-wxqpq
+[note] Get the *Token* value
+
+[login with token]
+56. copy the *Token* value(from #55), and paste to Web UI login
+
+[login with kubeconfig file]
+57. make a kubeconfig file.
+   # DASH_TOCKEN=$(kubectl get secret -n kube-system dashboard-admin-token-wxqpq -o jsonpath={.data.token}|base64 -d)
+   # kubectl config set-cluster kubernetes --server=10.67.117.23:6443 --kubeconfig=/home/developer/dashbord-admin.conf
+   # kubectl config set-credentials dashboard-admin --token=$DASH_TOCKEN --kubeconfig=/home/developer/dashbord-admin.conf
+   # kubectl config set-context dashboard-admin@kubernetes --cluster=kubernetes --user=dashboard-admin --kubeconfig=/home/developer/dashbord-admin.conf
+   # kubectl config use-context dashboard-admin@kubernetes --kubeconfig=/home/developer/dashbord-admin.conf
+[note] config file pwd: /home/developer/dashbord-admin.conf.
+      login with this file.
+======================================================================================

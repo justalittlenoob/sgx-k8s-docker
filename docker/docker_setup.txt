@@ -1,0 +1,46 @@
+﻿centOS 7 -pengfei, zhao
+=====================================================================================
+Uninstall old docker
+# sudo yum remove docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine
+
+======================================================================================
+1. yum proxy setting
+   a.#sudo vi /etc/yum.conf
+   b.add 3 line
+     proxy=http://child-prc.intel.com:913
+     proxy_username=developer
+     proxy_password=developer
+
+2. Update Docker Package Database
+    #sudo yum check-update
+
+3. Install the Dependencies
+   #sudo yum install -y yum-utils device-mapper-persistent-data lvm2
+
+4. Add the Docker Repository to CentOS
+   #sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+5. Install Latest Docker Engine-Community and containerd On CentOS Using Yum
+   # sudo yum install docker-ce docker-ce-cli containerd.io
+
+6. Manage Docker Service
+   Start Docker: #sudo systemctl start docker
+   Enable Docker: #sudo systemctl enable docker
+   Check the status of the service： sudo systemctl status docker
+
+7. test docker
+   #sudo docker run hello-world
+
+8. if #7 fail. Then need to set docker proxy
+   a. # sudo mkdir /etc/systemd/system/docker.service.d
+   b. # sudo vi /etc/systemd/system/docker.service.d/http-proxy.conf
+   c. add 
+      [Service]
+      Environment="HTTP_PROXY=http://developer:developer@child-prc.intel.com:913" "NO_PROXY=localhost,127.0.0.1,10.244.0.0/16,10.96.0.0/12,10.67.117.0/24"
+   d. reload the systemd daemon
+      # systemctl daemon-reload
+   e. restart docker
+      # systemctl restart docker
+   d. verify the proxy is added
+      # systemctl show docker --property Environment
+======================================================================================
